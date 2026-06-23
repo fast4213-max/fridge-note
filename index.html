@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>れいぞうこノート</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+/* ── デザイントークン ── */
+:root {
+  --bg:          #EEF3F7;
+  --surface:     #FFFFFF;
+  --border:      #D6DEE8;
+  --text:        #1A2030;
+  --muted:       #7A8899;
+  --accent:      #1A6B4A;
+  --tab-bg:      #E2EAF2;
+
+  /* 期限ステータス色 */
+  --urgent:      #C62828;   /* 当日・期限切れ */
+  --urgent-bg:   #FDECEA;
+  --warn:        #BF5000;   /* 1〜3日前 */
+  --warn-bg:     #FFF3E0;
+  --caution:     #8A6D00;   /* 4〜7日前 */
+  --caution-bg:  #FFFDE7;
+  --notice:      #1565C0;   /* 8〜30日前 */
+  --notice-bg:   #E3F2FD;
+  --done-bg:     #F2F4F7;
+  --done-text:   #A0A8B4;
+
+  --r:     10px;
+  --shadow: 0 1px 5px rgba(0,0,0,.07);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Hiragino Sans', 'Noto Sans JP', 'YuGothic', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  padding-bottom: 48px;
+}
+
+/* ── ヘッダー ── */
+header {
+  background: var(--accent);
+  color: #fff;
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.header-left h1  { font-size: 1.1rem; font-weight: 700; letter-spacing: .04em; }
+.header-left p   { font-size: .72rem; opacity: .7; margin-top: 2px; }
+.sync-btn {
+  background: rgba(255,255,255,.18);
+  border: none; color: #fff;
+  border-radius: 6px;
+  padding: 7px 13px;
+  font-size: .8rem;
+  cursor: pointer;
+  display: flex; align-items: center; gap: 5px;
+  transition: background .15s;
+}
+.sync-btn:hover { background: rgba(255,255,255,.28); }
+.spin { display:none; animation: rot .7s linear infinite; }
+.syncing .spin       { display:inline; }
+.syncing .sync-label { display:none; }
+@keyframes rot { to { transform: rotate(360deg); } }
+
+/* ── エラーバナー ── */
+.err-bar {
+  display: none;
+  background: var(--urgent-bg);
+  border-bottom: 1px solid #EF9A9A;
+  padding: 9px 16px;
+  font-size: .82rem;
+  color: var(--urgent);
+}
+.err-bar.show { display: block; }
+
+/* ── タブ ── */
+.tabs {
+  display: flex;
+  background: var(--tab-bg);
+  border-bottom: 2px solid var(--border);
+}
+.tab-btn {
+  flex: 1;
+  border: none; background: transparent;
+  padding: 12px 4px;
+  font-size: .86rem; font-weight: 600; color: var(--muted);
+  cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -2px;
+  transition: color .15s, border-color .15s;
+}
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); background: var(--surface); }
+.tab-icon  { font-size: 1.25rem; line-height: 1; }
+.tab-label { font-size: .68rem; }
+.tab-badge {
+  background: var(--urgent); color: #fff;
+  font-size: .6rem; border-radius: 99px;
+  padding: 1px 5px; display: none; font-weight: 700;
+}
+.tab-btn.has-urgent .tab-badge { display: inline; }
+
+/* ── 入力エリア ── */
+.input-area {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 14px;
+  display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap;
+}
+.ig { display: flex; flex-direction: column; gap: 3px; }
+.ig label { font-size: .68rem; font-weight: 700; color: var(--muted); letter-spacing: .05em; }
+.ig input {
+  border: 1.5px solid var(--border); border-radius: 7px;
+  padding: 8px 10px; font-size: .9rem;
+  background: var(--bg); color: var(--text); outline: none;
+  transition: border-color .15s;
+}
+.ig input:focus { border-color: var(--accent); }
+#inp-name { width: 170px; }
+#inp-date { width: 148px; }
+.add-btn {
+  background: var(--accent); color: #fff;
+  border: none; border-radius: 7px;
+  padding: 9px 20px; font-size: .9rem; font-weight: 700;
+  cursor: pointer; white-space: nowrap; align-self: flex-end;
+  transition: opacity .15s, transform .1s;
+}
+.add-btn:active   { opacity: .82; transform: scale(.97); }
+.add-btn:disabled { background: var(--muted); cursor: default; transform: none; }
+
+/* ── リスト ── */
+.list-wrap { padding: 12px 12px 0; display: flex; flex-direction: column; gap: 7px; }
+.empty {
+  text-align: center; padding: 52px 20px;
+  color: var(--muted); font-size: .88rem; line-height: 2;
+}
+
+/* ── アイテム ── */
+.item {
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: var(--r);
+  padding: 11px 12px;
+  display: flex; align-items: center; gap: 10px;
+  box-shadow: var(--shadow);
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .2s, border-color .2s, opacity .25s;
+  cursor: default;
+}
+.item.s-urgent  { background: var(--urgent-bg);  border-color: #EF9A9A; }
+.item.s-warn    { background: var(--warn-bg);    border-color: #FFCC80; }
+.item.s-caution { background: var(--caution-bg); border-color: #FFF176; }
+.item.s-notice  { background: var(--notice-bg);  border-color: #90CAF9; }
+.item.s-done    { background: var(--done-bg);    border-color: var(--border); opacity: .6; }
+
+.item input[type=checkbox] {
+  width: 18px; height: 18px;
+  flex-shrink: 0; accent-color: var(--accent); cursor: pointer;
+}
+.item-body { flex: 1; min-width: 0; }
+.item-name {
+  font-size: .95rem; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.item.s-done .item-name { text-decoration: line-through; color: var(--done-text); }
+.item-date { font-size: .73rem; color: var(--muted); margin-top: 2px; }
+
+.item-badge {
+  font-size: .7rem; font-weight: 700;
+  border-radius: 6px; padding: 3px 8px;
+  flex-shrink: 0; white-space: nowrap;
+}
+.item.s-urgent  .item-badge { background: var(--urgent);  color: #fff; }
+.item.s-warn    .item-badge { background: var(--warn);    color: #fff; }
+.item.s-caution .item-badge { background: #B8960A;        color: #fff; }
+.item.s-notice  .item-badge { background: var(--notice);  color: #fff; }
+.item.s-normal  .item-badge { background: var(--border);  color: var(--muted); }
+.item.s-done    .item-badge { background: var(--done-bg); color: var(--done-text); border: 1px solid var(--border); }
+
+.footer-note {
+  text-align: center; font-size: .72rem;
+  color: var(--muted); padding: 14px 0 0;
+}
+
+/* ── 色分け凡例 ── */
+.legend {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.legend-item {
+  display: flex; align-items: center; gap: 4px;
+  font-size: .68rem; color: var(--muted);
+}
+.legend-dot {
+  width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0;
+}
+
+/* ── 削除ポップアップ ── */
+.overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(10,20,30,.5);
+  z-index: 200; align-items: center; justify-content: center;
+}
+.overlay.show { display: flex; }
+.popup {
+  background: var(--surface); border-radius: 16px;
+  padding: 24px 20px 20px;
+  width: min(320px, 92vw);
+  box-shadow: 0 10px 40px rgba(0,0,0,.2);
+}
+.popup h2 { font-size: 1rem; font-weight: 700; margin-bottom: 8px; }
+.popup p  { font-size: .84rem; color: var(--muted); line-height: 1.7; margin-bottom: 18px; }
+.popup-name { font-weight: 700; color: var(--text); }
+.popup-btns { display: flex; gap: 10px; }
+.popup-btns button {
+  flex: 1; padding: 10px; border: none;
+  border-radius: 8px; font-size: .9rem; font-weight: 700; cursor: pointer;
+}
+.btn-cancel { background: var(--tab-bg); color: var(--text); }
+.btn-del    { background: var(--urgent); color: #fff; }
+
+/* ── トースト ── */
+.toast {
+  position: fixed; bottom: 28px; left: 50%;
+  transform: translateX(-50%) translateY(12px);
+  background: #1A2030; color: #fff;
+  font-size: .83rem; padding: 10px 22px;
+  border-radius: 99px; opacity: 0;
+  pointer-events: none;
+  transition: opacity .22s, transform .22s;
+  white-space: nowrap; z-index: 300;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+@media(max-width:400px){
+  #inp-name, #inp-date { width: 100%; }
+  .input-area { flex-direction: column; }
+  .add-btn    { width: 100%; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-left">
+    <h1>🧊 れいぞうこノート</h1>
+    <p>家族で使う期限管理</p>
+  </div>
+  <button class="sync-btn" id="syncBtn" onclick="loadItems()">
+    <span class="spin">↻</span>
+    <span class="sync-label">↻ 更新</span>
+  </button>
+</header>
+
+<div class="err-bar" id="errBar"></div>
+
+<!-- 色分け凡例 -->
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:#EF9A9A;border:1.5px solid #C62828"></div>当日・期限切れ</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#FFCC80;border:1.5px solid #BF5000"></div>1〜3日前</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#FFF176;border:1.5px solid #8A6D00"></div>4〜7日前</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#90CAF9;border:1.5px solid #1565C0"></div>8〜30日前</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#D6DEE8;border:1.5px solid #7A8899"></div>余裕あり</div>
+</div>
+
+<!-- タブ -->
+<div class="tabs">
+  <button class="tab-btn active" data-zone="fridge"  onclick="switchTab('fridge')">
+    <span class="tab-icon">🧊</span>
+    <span class="tab-label">冷蔵庫</span>
+    <span class="tab-badge" id="badge-fridge">!</span>
+  </button>
+  <button class="tab-btn" data-zone="freezer" onclick="switchTab('freezer')">
+    <span class="tab-icon">❄️</span>
+    <span class="tab-label">冷凍庫</span>
+    <span class="tab-badge" id="badge-freezer">!</span>
+  </button>
+  <button class="tab-btn" data-zone="shelf"   onclick="switchTab('shelf')">
+    <span class="tab-icon">📦</span>
+    <span class="tab-label">常温棚</span>
+    <span class="tab-badge" id="badge-shelf">!</span>
+  </button>
+</div>
+
+<!-- 入力 -->
+<div class="input-area">
+  <div class="ig">
+    <label>品名</label>
+    <input id="inp-name" type="text" placeholder="例：牛乳" maxlength="30"
+           onkeydown="if(event.key==='Enter')addItem()">
+  </div>
+  <div class="ig">
+    <label>期限</label>
+    <input id="inp-date" type="date">
+  </div>
+  <button class="add-btn" id="addBtn" onclick="addItem()">＋ 追加</button>
+</div>
+
+<!-- リスト -->
+<div class="list-wrap" id="listWrap"></div>
+<div class="footer-note" id="footerNote"></div>
+
+<!-- 削除ポップアップ -->
+<div class="overlay" id="overlay">
+  <div class="popup">
+    <h2>🗑️ 今すぐ削除</h2>
+    <p>
+      <span class="popup-name" id="popupName"></span><br>
+      を削除します。この操作は取り消せません。<br>
+      <span style="color:var(--accent)">使い切った場合はチェック☑️がおすすめです</span>
+    </p>
+    <div class="popup-btns">
+      <button class="btn-cancel" onclick="closePopup()">やめる</button>
+      <button class="btn-del"    onclick="confirmDelete()">削除する</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  ★ ここを自分の値に書き換える ★
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const SUPABASE_URL  = 'https://XXXXXXXXXXXXXXXX.supabase.co';
+const SUPABASE_ANON = 'eyJXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX';
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+const TABLE = 'food_items';
+const ZONES = { fridge:'冷蔵庫', freezer:'冷凍庫', shelf:'常温棚' };
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+
+let currentZone = 'fridge';
+let items       = [];
+let deleteId    = null;
+let pressTimer  = null;
+
+// ── データ取得 ──
+async function loadItems() {
+  setSyncing(true);
+  hideErr();
+  try {
+    const { data, error } = await sb
+      .from(TABLE).select('*').order('expiry', { ascending: true });
+    if (error) throw error;
+    items = data || [];
+    render();
+  } catch (e) {
+    showErr('データ読み込みエラー: ' + e.message);
+  } finally {
+    setSyncing(false);
+  }
+}
+
+// ── アイテム追加 ──
+async function addItem() {
+  const name   = document.getElementById('inp-name').value.trim();
+  const expiry = document.getElementById('inp-date').value;
+  if (!name)   { toast('品名を入力してください'); return; }
+  if (!expiry) { toast('期限を入力してください'); return; }
+
+  const btn = document.getElementById('addBtn');
+  btn.disabled = true;
+
+  // ── 登録時点で既に過ぎているタイミングは最初からフラグをtrueにしておく ──
+  // これにより「5日後の期限を登録した時に7日前通知が即発火する」バグを防ぐ
+  const today    = new Date(); today.setHours(0,0,0,0);
+  const expDate  = new Date(expiry + 'T00:00:00');
+  const diffDays = Math.floor((expDate - today) / 86400000);
+
+  const row = {
+    name,
+    expiry,
+    zone:      currentZone,
+    checked:   false,
+    // 登録時点でそのタイミングがすでに過ぎている（または今日以内）ならtrueにしてスキップ
+    notified30: diffDays < 30,   // 30日以上先でなければ30日前通知は不要
+    notified7:  diffDays < 7,
+    notified3:  diffDays < 3,
+    notified1:  diffDays < 1,
+  };
+
+  try {
+    const { data, error } = await sb.from(TABLE).insert([row]).select().single();
+    if (error) throw error;
+    items.push(data);
+    items.sort((a,b) => a.expiry.localeCompare(b.expiry));
+    document.getElementById('inp-name').value = '';
+    document.getElementById('inp-date').value = '';
+    render();
+    toast('✅ 追加しました');
+  } catch (e) {
+    toast('⚠️ 保存エラー: ' + e.message);
+  }
+  btn.disabled = false;
+}
+
+// ── チェック切り替え ──
+async function toggleCheck(id) {
+  const item = items.find(i => i.id === id);
+  if (!item) return;
+  const next = !item.checked;
+  item.checked = next;
+  render();
+  try {
+    const { error } = await sb.from(TABLE).update({ checked: next }).eq('id', id);
+    if (error) throw error;
+  } catch (e) {
+    item.checked = !next;
+    render();
+    toast('⚠️ 更新エラー: ' + e.message);
+  }
+}
+
+// ── 長押し削除 ──
+function startPress(id) { pressTimer = setTimeout(() => openPopup(id), 600); }
+function endPress()     { clearTimeout(pressTimer); }
+
+function openPopup(id) {
+  const item = items.find(i => i.id === id);
+  if (!item) return;
+  deleteId = id;
+  document.getElementById('popupName').textContent =
+    `${item.name}（${ZONES[item.zone]} / 期限 ${fmt(item.expiry)}）`;
+  document.getElementById('overlay').classList.add('show');
+}
+function closePopup() {
+  deleteId = null;
+  document.getElementById('overlay').classList.remove('show');
+}
+async function confirmDelete() {
+  if (!deleteId) return;
+  const id     = deleteId;
+  const before = [...items];
+  items = items.filter(i => i.id !== id);
+  closePopup();
+  render();
+  try {
+    const { error } = await sb.from(TABLE).delete().eq('id', id);
+    if (error) throw error;
+    toast('🗑️ 削除しました');
+  } catch (e) {
+    items = before;
+    render();
+    toast('⚠️ 削除エラー: ' + e.message);
+  }
+}
+
+// ── タブ ──
+function switchTab(zone) {
+  currentZone = zone;
+  document.querySelectorAll('.tab-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.zone === zone));
+  render();
+}
+
+// ── 描画 ──
+function render() {
+  // タブバッジ：3日以内の未チェックがいれば赤
+  Object.keys(ZONES).forEach(z => {
+    const has = items.some(i => i.zone === z && !i.checked && dayDiff(i.expiry) <= 3);
+    document.querySelector(`.tab-btn[data-zone="${z}"]`).classList.toggle('has-urgent', has);
+  });
+
+  const wrap  = document.getElementById('listWrap');
+  const fnote = document.getElementById('footerNote');
+
+  const zItems = items
+    .filter(i => i.zone === currentZone)
+    .sort((a,b) => {
+      if (a.checked !== b.checked) return a.checked ? 1 : -1;
+      return a.expiry.localeCompare(b.expiry);
+    });
+
+  if (zItems.length === 0) {
+    wrap.innerHTML = `<div class="empty">まだ登録がありません 🌿<br>${ZONES[currentZone]}に入っているものを追加してね</div>`;
+    fnote.textContent = '';
+    return;
+  }
+
+  wrap.innerHTML = zItems.map(item => {
+    const diff = dayDiff(item.expiry);
+    const { cls, badge } = statusOf(diff, item.checked);
+    return `
+      <div class="item ${cls}"
+        onmousedown="startPress('${item.id}')"   onmouseup="endPress()"   onmouseleave="endPress()"
+        ontouchstart="startPress('${item.id}')"  ontouchend="endPress()"  ontouchcancel="endPress()">
+        <input type="checkbox" ${item.checked ? 'checked' : ''}
+          onchange="toggleCheck('${item.id}')" onclick="event.stopPropagation()" onmousedown="event.stopPropagation()" ontouchstart="event.stopPropagation()">
+        <div class="item-body">
+          <div class="item-name">${esc(item.name)}</div>
+          <div class="item-date">期限 ${fmt(item.expiry)}</div>
+        </div>
+        <span class="item-badge">${badge}</span>
+      </div>`;
+  }).join('');
+
+  const checkedCnt = zItems.filter(i => i.checked).length;
+  fnote.textContent = checkedCnt > 0
+    ? `☑️ ${checkedCnt}件がチェック済み — 次の自動実行時に削除されます`
+    : '';
+}
+
+// ── 期限判定（表示用） ──
+function statusOf(diff, checked) {
+  if (checked)    return { cls:'s-done',   badge:'完了' };
+  if (diff < 0)   return { cls:'s-urgent', badge:'期限切れ' };
+  if (diff === 0) return { cls:'s-urgent', badge:'今日まで！' };
+  if (diff <= 3)  return { cls:'s-warn',   badge:`あと${diff}日` };
+  if (diff <= 7)  return { cls:'s-caution',badge:`あと${diff}日` };
+  if (diff <= 30) return { cls:'s-notice', badge:`あと${diff}日` };
+  return               { cls:'s-normal',  badge:`あと${diff}日` };
+}
+
+// ── ユーティリティ ──
+function dayDiff(dateStr) {
+  const today = new Date(); today.setHours(0,0,0,0);
+  const exp   = new Date(dateStr + 'T00:00:00');
+  return Math.floor((exp - today) / 86400000);
+}
+function fmt(d) {
+  if (!d) return '';
+  const [y,m,day] = d.split('-');
+  return `${y}/${m}/${day}`;
+}
+function esc(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 2800);
+}
+function setSyncing(on) { document.getElementById('syncBtn').classList.toggle('syncing', on); }
+function showErr(msg)   { const e = document.getElementById('errBar'); e.textContent='⚠️ '+msg; e.classList.add('show'); }
+function hideErr()      { document.getElementById('errBar').classList.remove('show'); }
+
+// ── 初期化 ──
+document.getElementById('inp-date').min = new Date().toISOString().split('T')[0];
+loadItems();
+</script>
+</body>
+</html>
