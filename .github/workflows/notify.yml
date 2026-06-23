@@ -1,0 +1,37 @@
+name: 期限チェック・Discord通知
+
+on:
+  # cron-job.org から叩かれる
+  repository_dispatch:
+    types: [check-expiry]
+
+  # 手動テスト用
+  workflow_dispatch:
+
+# 同時実行を直列化（キューイング）
+concurrency:
+  group: check-expiry
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: リポジトリをチェックアウト
+        uses: actions/checkout@v4
+
+      - name: Python 3.12 をセットアップ
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 依存ライブラリをインストール
+        run: pip install requests
+
+      - name: 期限チェック・Discord通知を実行
+        env:
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DISCORD_WEBHOOK_URL:  ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python notify.py
