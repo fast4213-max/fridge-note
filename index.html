@@ -407,13 +407,13 @@ async function addItem() {
 
 // ── チェック切り替え ──
 async function toggleCheck(id) {
-  const item = items.find(i => i.id === id);
+  const item = items.find(i => i.id === Number(id));
   if (!item) return;
   const next = !item.checked;
   item.checked = next;
   render();
   try {
-    const { error } = await sb.from(TABLE).update({ checked: next }).eq('id', id);
+    const { error } = await sb.from(TABLE).update({ checked: next }).eq('id', Number(id));
     if (error) throw error;
   } catch (e) {
     item.checked = !next;
@@ -423,13 +423,13 @@ async function toggleCheck(id) {
 }
 
 // ── 長押し削除 ──
-function startPress(id) { pressTimer = setTimeout(() => openPopup(id), 600); }
+function startPress(id) { pressTimer = setTimeout(() => openPopup(Number(id)), 600); }
 function endPress()     { clearTimeout(pressTimer); }
 
 function openPopup(id) {
-  const item = items.find(i => i.id === id);
+  const item = items.find(i => i.id === Number(id));
   if (!item) return;
-  deleteId = id;
+  deleteId = Number(id);
   document.getElementById('popupName').textContent =
     `${item.name}（${ZONES[item.zone]} / 期限 ${fmt(item.expiry)}）`;
   document.getElementById('overlay').classList.add('show');
@@ -442,11 +442,11 @@ async function confirmDelete() {
   if (!deleteId) return;
   const id     = deleteId;
   const before = [...items];
-  items = items.filter(i => i.id !== id);
+  items = items.filter(i => i.id !== Number(id));
   closePopup();
   render();
   try {
-    const { error } = await sb.from(TABLE).delete().eq('id', id);
+    const { error } = await sb.from(TABLE).delete().eq('id', Number(id));
     if (error) throw error;
     toast('🗑️ 削除しました');
   } catch (e) {
