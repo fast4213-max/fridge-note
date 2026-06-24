@@ -423,7 +423,7 @@ async function toggleCheck(id) {
 }
 
 // ── 長押し削除 ──
-function startPress(id) { pressTimer = setTimeout(() => openPopup(Number(id)), 1500); }
+function startPress(id) { pressTimer = setTimeout(() => openPopup(Number(id)), 1000); }
 function endPress()     { clearTimeout(pressTimer); }
 
 function openPopup(id) {
