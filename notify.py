@@ -170,7 +170,6 @@ def build_embed(item: dict, days_left: int) -> dict:
         "description": label,
         "color":       color,
         "footer":      {"text": f"期限：{expiry}"},
-        "timestamp":   f"{expiry}T00:00:00+00:00",
     }
 
 
