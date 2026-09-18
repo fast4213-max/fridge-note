@@ -12,9 +12,14 @@ import os
 import sys
 import time
 import logging
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 import requests
+
+# GitHub Actions のランナーはUTCで動作するため、日本時間の日付を明示的に使う
+# （UTC基準のままだと日本時間0時台の実行で「今日」が1日ずれる）
+JST = ZoneInfo("Asia/Tokyo")
 
 # ── 定数 ──────────────────────────────────────────────
 SUPABASE_URL         = os.environ["SUPABASE_URL"]
@@ -194,8 +199,8 @@ def send_discord(embed: dict) -> bool:
 
 def main():
     log.info("=== 通知処理 開始 ===")
-    today = date.today()
-    log.info("実行日: %s", today.isoformat())
+    today = datetime.now(JST).date()
+    log.info("実行日: %s (JST)", today.isoformat())
 
     # ① 全アイテム取得
     try:

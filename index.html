@@ -547,7 +547,16 @@ function showErr(msg)   { const e = document.getElementById('errBar'); e.textCon
 function hideErr()      { document.getElementById('errBar').classList.remove('show'); }
 
 // ── 初期化 ──
-document.getElementById('inp-date').min = new Date().toISOString().split('T')[0];
+// toISOString()はUTC基準になるため、日本時間の深夜0時〜朝9時台に
+// 「今日」より1日古い日付がminになってしまうのを防ぐ（ローカル日付で算出）
+function todayLocalStr() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+document.getElementById('inp-date').min = todayLocalStr();
 loadItems();
 </script>
 </body>
