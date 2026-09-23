@@ -45,10 +45,14 @@ NOTIFY_FLAGS = {
 }
 
 # 1回の実行で送れる最大件数（超えた分は次回へ繰り越し）
-MAX_NOTIFY = 10
+MAX_NOTIFY = 30
+
+# Discordは1メッセージに最大10個のEmbedを載せられる（合計6000文字まで）
+# → 10件ずつまとめて送ることで、30件でも送信は3回で済む
+EMBEDS_PER_MESSAGE = 10
 
 # Discord送信間隔（レートリミット対策）
-SEND_INTERVAL_SEC = 0.5
+SEND_INTERVAL_SEC = 1.0
 
 # Discord Embed カラー
 COLOR_URGENT  = 0xC62828  # 当日・期限切れ（赤）
@@ -189,13 +193,13 @@ def build_embed(item: dict, days_left: int) -> dict:
     }
 
 
-def send_discord(embed: dict, retries: int = 3) -> bool:
-    """Discord Webhookに送信する。成功:True / 失敗:False"""
+def send_discord(embeds: list[dict], retries: int = 3) -> bool:
+    """Discord Webhookに送信する（Embedは最大10個まで）。成功:True / 失敗:False"""
     for attempt in range(retries):
         try:
             res = requests.post(
                 DISCORD_WEBHOOK_URL,
-                json={"embeds": [embed]},
+                json={"embeds": embeds},
                 timeout=10,
             )
         except requests.RequestException as e:
@@ -204,6 +208,14 @@ def send_discord(embed: dict, retries: int = 3) -> bool:
 
         # 通常は 204、URLに ?wait=true が付いていると 200 が返る
         if 200 <= res.status_code < 300:
+            # 残り送信可能回数が0なら、制限が解除されるまで待ってから次へ進む
+            if res.headers.get("X-RateLimit-Remaining") == "0":
+                try:
+                    wait = float(res.headers.get("X-RateLimit-Reset-After", 1))
+                except ValueError:
+                    wait = 1.0
+                log.info("レートリミット残り0 → %.1f秒待機", wait)
+                time.sleep(wait)
             return True
 
         # レートリミット：指定秒数待って再送する
@@ -265,33 +277,38 @@ def main():
 
     log.info("通知対象: %d件（上限%d件）", len(targets), MAX_NOTIFY)
 
-    # ④ Discord送信（最大MAX_NOTIFY件、超えた分は繰り越し・削除しない）
+    # ④ Discord送信（最大MAX_NOTIFY件を10件ずつまとめて送る。超えた分は繰り越し・削除しない）
     sent_count = 0
     failed     = False
+    to_send    = targets[:MAX_NOTIFY]
 
-    for item, days_left, notify_days in targets[:MAX_NOTIFY]:
-        embed = build_embed(item, days_left)
-        log.info("送信: %s（あと%d日 / %d日前通知）", item.get("name"), days_left, notify_days)
+    for start in range(0, len(to_send), EMBEDS_PER_MESSAGE):
+        chunk = to_send[start:start + EMBEDS_PER_MESSAGE]
+        if start > 0:
+            time.sleep(SEND_INTERVAL_SEC)
 
-        if not send_discord(embed):
-            log.error("送信失敗 → 処理を中断します")
+        for item, days_left, notify_days in chunk:
+            log.info("送信: %s（あと%d日 / %d日前通知）", item.get("name"), days_left, notify_days)
+
+        if not send_discord([build_embed(item, days_left) for item, days_left, _ in chunk]):
+            log.error("送信失敗 → 処理を中断します（未送信分は次回へ繰り越し）")
             failed = True
             break
 
         # 送信成功 → 送ったフラグ + それより緊急度の低い（日数が大きい）未送信フラグも
         # まとめて True にする（例：前日通知を送ったなら3日前・7日前・30日前もスキップ）
-        flags_to_set = {}
-        for d, flag_key in NOTIFY_FLAGS.items():
-            if d >= notify_days and flag_key in item and not item.get(flag_key, False):
-                flags_to_set[flag_key] = True
-        try:
-            update_notify_flags(item["id"], flags_to_set)
-        except Exception as e:
-            # フラグ更新失敗は次回重複送信の可能性があるが、処理は続行する
-            log.warning("フラグ更新エラー（id=%s）: %s", item["id"], e)
+        for item, _, notify_days in chunk:
+            flags_to_set = {}
+            for d, flag_key in NOTIFY_FLAGS.items():
+                if d >= notify_days and flag_key in item and not item.get(flag_key, False):
+                    flags_to_set[flag_key] = True
+            try:
+                update_notify_flags(item["id"], flags_to_set)
+            except Exception as e:
+                # フラグ更新失敗は次回重複送信の可能性があるが、処理は続行する
+                log.warning("フラグ更新エラー（id=%s）: %s", item["id"], e)
 
-        sent_count += 1
-        time.sleep(SEND_INTERVAL_SEC)
+        sent_count += len(chunk)
 
     # ⑤ 繰り越し件数をログ出力
     remaining = len(targets) - sent_count
