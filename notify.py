@@ -35,12 +35,13 @@ TABLE_NAME           = "food_items"
 
 # 通知タイミング（日前）。緊急度が高い順（小さい順）に定義する
 # → get_notify_target で最も緊急な通知を優先して返すため
-NOTIFY_DAYS  = [1, 3, 7, 30]
+NOTIFY_DAYS  = [0, 1, 3, 7, 30]
 NOTIFY_FLAGS = {
     30: "notified30",
     7:  "notified7",
     3:  "notified3",
     1:  "notified1",
+    0:  "notified0",   # 当日（期限切れ含む）
 }
 
 # 1回の実行で送れる最大件数（超えた分は次回へ繰り越し）
@@ -124,7 +125,8 @@ def get_notify_target(item: dict, today: date) -> int | None:
     通知不要なら None を返す。
 
     ポイント：
-    - notified30/7/3/1 が True のものはスキップ（送信済み）
+    - notified30/7/3/1/0 が True のものはスキップ（送信済み）
+    - フラグ列がDBに無いもの（notified0 追加前のテーブル）は判定しない
     - diff > days のものはスキップ（まだそのタイミングではない）
       例：diff=10 で days=7 なら、まだ7日前ではないのでスキップ
     """
@@ -135,11 +137,14 @@ def get_notify_target(item: dict, today: date) -> int | None:
 
     diff = (expiry - today).days  # 正：まだ先、負：期限切れ
 
-    # NOTIFY_DAYS は [1, 3, 7, 30] の順 → 最も緊急な通知（最小days）を優先して返す
-    # 例：diff=2 なら days=1はまだ（diff > 1）、days=3でマッチ → 3日前通知を返す
-    # 例：diff=0 なら days=1でマッチ（diff <= 1）→ 前日通知を返す
+    # NOTIFY_DAYS は [0, 1, 3, 7, 30] の順 → 最も緊急な通知（最小days）を優先して返す
+    # 例：diff=2 なら days=0,1はまだ、days=3でマッチ → 3日前通知を返す
+    # 例：diff=0 なら days=0でマッチ → 当日通知を返す
     for days in NOTIFY_DAYS:
         flag_key = NOTIFY_FLAGS[days]
+        if flag_key not in item:
+            # 列が未作成のまま送ると、フラグ更新に失敗して毎回同じ通知が飛ぶため
+            continue
         already_sent = item.get(flag_key, False)
         is_time      = diff <= days  # 今日がそのタイミング以降になっている
 
@@ -245,6 +250,8 @@ def main():
 
     # ③ 通知対象を収集（期限昇順 = すでにfetch時にソート済み）
     active_items = [i for i in items if not i.get("checked")]
+    if active_items and "notified0" not in active_items[0]:
+        log.warning("notified0 列がありません → 当日通知はスキップします（README の追加SQLを実行してください）")
 
     # (item, days_left, notify_days) のリストを作る
     targets: list[tuple[dict, int, int]] = []
@@ -275,7 +282,7 @@ def main():
         # まとめて True にする（例：前日通知を送ったなら3日前・7日前・30日前もスキップ）
         flags_to_set = {}
         for d, flag_key in NOTIFY_FLAGS.items():
-            if d >= notify_days and not item.get(flag_key, False):
+            if d >= notify_days and flag_key in item and not item.get(flag_key, False):
                 flags_to_set[flag_key] = True
         try:
             update_notify_flags(item["id"], flags_to_set)

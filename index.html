@@ -394,6 +394,8 @@ async function addItem() {
     notified7:  diffDays < 7,
     notified3:  diffDays < 3,
     notified1:  diffDays < 1,
+    // notified0（当日通知）はDBの既定値 false に任せる
+    // → 今日が期限の品目も当日通知が届く／列追加前のDBでも登録エラーにならない
   };
 
   try {

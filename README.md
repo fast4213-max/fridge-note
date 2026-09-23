@@ -214,6 +214,18 @@ cron-job.orgがGitHub Actionsを起動するためのトークンです。
 | 7日前  | 期限まで7日以下になったとき（1回のみ） |
 | 3日前  | 期限まで3日以下になったとき（1回のみ） |
 | 前日   | 期限まで1日以下になったとき（1回のみ） |
+| 当日   | 期限当日、または期限を過ぎているとき（1回のみ） |
+
+**当日通知を後から追加する場合（既存テーブル）：**
+Supabase の SQL Editor で以下を1回だけ実行してください。
+未実行のままでもアプリ・通知は動きますが、当日通知だけ送られません。
+
+```sql
+alter table food_items add column if not exists notified0 boolean not null default false;
+-- 既に期限を過ぎている品目に「期限切れ」通知がまとめて飛ばないようにする
+update food_items set notified0 = true
+  where expiry < (now() at time zone 'Asia/Tokyo')::date;
+```
 
 **登録時の注意：**
 期限まで5日のものを登録した場合、30日前・7日前はスキップされ、
@@ -269,7 +281,7 @@ fridge-note/（GitHubリポジトリ）
 
 - `DISCORD_WEBHOOK_URL` が正しいか確認
 - 期限30日以内のアイテムが登録されているか確認
-- Supabaseで `notified30`〜`notified1` がすべて `false` になっているか確認
+- Supabaseで `notified30`〜`notified0` がすべて `false` になっているか確認
   （`true` になっていたら手動で `false` に戻すとテスト可能）
 
 ### cron-job.org が 401 エラー
