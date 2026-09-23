@@ -347,6 +347,7 @@ let items       = [];
 let deleteId    = null;
 let pressTimer  = null;
 let pressFired  = false;
+let pressX = 0, pressY = 0;
 let toastTimer  = null;
 
 // ── データ取得 ──
@@ -431,10 +432,18 @@ async function toggleCheck(id) {
 }
 
 // ── 長押し削除 ──
-function startPress(id) {
+function startPress(id, e) {
   clearTimeout(pressTimer);
   pressFired = false;
+  const t = e && e.touches && e.touches[0];
+  if (t) { pressX = t.clientX; pressY = t.clientY; }
   pressTimer = setTimeout(() => { pressFired = true; openPopup(Number(id)); }, 1500);
+}
+// 指のわずかな揺れでも touchmove は発生するため、10px以上動いた（スクロール）時だけ取り消す
+function movePress(e) {
+  const t = e.touches && e.touches[0];
+  if (!t) return;
+  if (Math.abs(t.clientX - pressX) > 10 || Math.abs(t.clientY - pressY) > 10) endPress();
 }
 function endPress(e) {
   clearTimeout(pressTimer);
@@ -512,8 +521,8 @@ function render() {
     return `
       <div class="item ${cls}"
         onmousedown="startPress('${item.id}')"   onmouseup="endPress()"   onmouseleave="endPress()"
-        ontouchstart="startPress('${item.id}')"  ontouchend="endPress(event)"  ontouchcancel="endPress()"
-        ontouchmove="endPress()" oncontextmenu="event.preventDefault()">
+        ontouchstart="startPress('${item.id}', event)"  ontouchend="endPress(event)"  ontouchcancel="endPress()"
+        ontouchmove="movePress(event)" oncontextmenu="event.preventDefault()">
         <input type="checkbox" ${item.checked ? 'checked' : ''}
           onchange="toggleCheck('${item.id}')" onclick="event.stopPropagation()" onmousedown="event.stopPropagation()" ontouchstart="event.stopPropagation()">
         <div class="item-body">
@@ -580,6 +589,14 @@ function todayLocalStr() {
 }
 document.getElementById('inp-date').min = todayLocalStr();
 loadItems();
+
+// アプリを開きっぱなしで日付が変わったり、家族が別の端末で更新したりしても
+// 画面に戻った時に最新の状態（期限の残り日数・一覧）へ更新する
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  document.getElementById('inp-date').min = todayLocalStr();
+  loadItems();
+});
 </script>
 </body>
 </html>
