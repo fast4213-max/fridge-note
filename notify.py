@@ -22,7 +22,13 @@ import requests
 JST = ZoneInfo("Asia/Tokyo")
 
 # ── 定数 ──────────────────────────────────────────────
-SUPABASE_URL         = os.environ["SUPABASE_URL"]
+REQUIRED_ENV = ("SUPABASE_URL", "SUPABASE_SERVICE_KEY", "DISCORD_WEBHOOK_URL")
+_missing = [k for k in REQUIRED_ENV if not os.environ.get(k)]
+if _missing:
+    # Secrets 未設定だと KeyError のトレースバックだけで原因が分かりにくいため明示する
+    sys.exit(f"環境変数が未設定です: {', '.join(_missing)}（GitHub Secrets を確認してください）")
+
+SUPABASE_URL         = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 DISCORD_WEBHOOK_URL  = os.environ["DISCORD_WEBHOOK_URL"]
 TABLE_NAME           = "food_items"
@@ -178,21 +184,36 @@ def build_embed(item: dict, days_left: int) -> dict:
     }
 
 
-def send_discord(embed: dict) -> bool:
+def send_discord(embed: dict, retries: int = 3) -> bool:
     """Discord Webhookに送信する。成功:True / 失敗:False"""
-    try:
-        res = requests.post(
-            DISCORD_WEBHOOK_URL,
-            json={"embeds": [embed]},
-            timeout=10,
-        )
-        if res.status_code == 204:
+    for attempt in range(retries):
+        try:
+            res = requests.post(
+                DISCORD_WEBHOOK_URL,
+                json={"embeds": [embed]},
+                timeout=10,
+            )
+        except requests.RequestException as e:
+            log.error("Discord送信例外: %s", e)
+            return False
+
+        # 通常は 204、URLに ?wait=true が付いていると 200 が返る
+        if 200 <= res.status_code < 300:
             return True
+
+        # レートリミット：指定秒数待って再送する
+        if res.status_code == 429 and attempt < retries - 1:
+            try:
+                wait = float(res.json().get("retry_after", 1))
+            except ValueError:
+                wait = 1.0
+            log.warning("Discordレートリミット → %.1f秒待って再送", wait)
+            time.sleep(wait)
+            continue
+
         log.error("Discord送信失敗: HTTP %d / %s", res.status_code, res.text[:200])
         return False
-    except requests.RequestException as e:
-        log.error("Discord送信例外: %s", e)
-        return False
+    return False
 
 
 # ── メイン ────────────────────────────────────────────

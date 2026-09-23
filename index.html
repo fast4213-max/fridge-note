@@ -150,6 +150,8 @@ header {
   display: flex; align-items: center; gap: 10px;
   box-shadow: var(--shadow);
   user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
   -webkit-tap-highlight-color: transparent;
   transition: background .2s, border-color .2s, opacity .25s;
   cursor: default;
@@ -344,6 +346,8 @@ let currentZone = 'fridge';
 let items       = [];
 let deleteId    = null;
 let pressTimer  = null;
+let pressFired  = false;
+let toastTimer  = null;
 
 // ── データ取得 ──
 async function loadItems() {
@@ -370,13 +374,15 @@ async function addItem() {
   if (!expiry) { toast('期限を入力してください'); return; }
 
   const btn = document.getElementById('addBtn');
+  // Enterキー連打・通信中の再送信で同じ品目が二重登録されるのを防ぐ
+  if (btn.disabled) return;
   btn.disabled = true;
 
   // ── 登録時点で既に過ぎているタイミングは最初からフラグをtrueにしておく ──
   // これにより「5日後の期限を登録した時に7日前通知が即発火する」バグを防ぐ
   const today    = new Date(); today.setHours(0,0,0,0);
   const expDate  = new Date(expiry + 'T00:00:00');
-  const diffDays = Math.floor((expDate - today) / 86400000);
+  const diffDays = Math.round((expDate - today) / 86400000);
 
   const row = {
     name,
@@ -423,8 +429,18 @@ async function toggleCheck(id) {
 }
 
 // ── 長押し削除 ──
-function startPress(id) { pressTimer = setTimeout(() => openPopup(Number(id)), 1500); }
-function endPress()     { clearTimeout(pressTimer); }
+function startPress(id) {
+  clearTimeout(pressTimer);
+  pressFired = false;
+  pressTimer = setTimeout(() => { pressFired = true; openPopup(Number(id)); }, 1500);
+}
+function endPress(e) {
+  clearTimeout(pressTimer);
+  // 長押しでポップアップを開いた直後、指を離した時の合成クリックが
+  // ポップアップのボタンに当たって誤削除されるのを防ぐ
+  if (pressFired && e && e.type === 'touchend' && e.cancelable) e.preventDefault();
+  pressFired = false;
+}
 
 function openPopup(id) {
   const item = items.find(i => i.id === Number(id));
@@ -494,7 +510,8 @@ function render() {
     return `
       <div class="item ${cls}"
         onmousedown="startPress('${item.id}')"   onmouseup="endPress()"   onmouseleave="endPress()"
-        ontouchstart="startPress('${item.id}')"  ontouchend="endPress()"  ontouchcancel="endPress()">
+        ontouchstart="startPress('${item.id}')"  ontouchend="endPress(event)"  ontouchcancel="endPress()"
+        ontouchmove="endPress()" oncontextmenu="event.preventDefault()">
         <input type="checkbox" ${item.checked ? 'checked' : ''}
           onchange="toggleCheck('${item.id}')" onclick="event.stopPropagation()" onmousedown="event.stopPropagation()" ontouchstart="event.stopPropagation()">
         <div class="item-body">
@@ -526,7 +543,8 @@ function statusOf(diff, checked) {
 function dayDiff(dateStr) {
   const today = new Date(); today.setHours(0,0,0,0);
   const exp   = new Date(dateStr + 'T00:00:00');
-  return Math.floor((exp - today) / 86400000);
+  // サマータイム等で1日が23/25時間になる環境でもずれないよう四捨五入
+  return Math.round((exp - today) / 86400000);
 }
 function fmt(d) {
   if (!d) return '';
@@ -540,7 +558,9 @@ function toast(msg) {
   const el = document.getElementById('toast');
   el.textContent = msg;
   el.classList.add('show');
-  setTimeout(() => el.classList.remove('show'), 2800);
+  // 連続表示時に前のタイマーで新しいトーストが早く消えないようにする
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2800);
 }
 function setSyncing(on) { document.getElementById('syncBtn').classList.toggle('syncing', on); }
 function showErr(msg)   { const e = document.getElementById('errBar'); e.textContent='⚠️ '+msg; e.classList.add('show'); }
