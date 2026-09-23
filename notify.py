@@ -136,7 +136,7 @@ def get_notify_target(item: dict, today: date) -> int | None:
     """
     try:
         expiry = date.fromisoformat(item["expiry"])
-    except (KeyError, ValueError):
+    except (KeyError, TypeError, ValueError):  # 期限が空(None)・不正な形式
         return None
 
     diff = (expiry - today).days  # 正：まだ先、負：期限切れ
@@ -163,7 +163,7 @@ def get_notify_target(item: dict, today: date) -> int | None:
 def build_embed(item: dict, days_left: int) -> dict:
     """Discord Embed オブジェクトを組み立てる。"""
     zone_name = ZONE_NAMES.get(item.get("zone", ""), item.get("zone", ""))
-    name      = item.get("name", "（名前なし）")
+    name      = item.get("name") or "（名前なし）"
     expiry    = item.get("expiry", "")
 
     if days_left < 0:
@@ -185,8 +185,14 @@ def build_embed(item: dict, days_left: int) -> dict:
         label = f"🔵 期限まであと {days_left} 日"
         color = COLOR_NOTICE
 
+    # Embedのタイトル上限は256文字。超えると400エラーになり、同じメッセージに
+    # まとめた10件すべてが毎回送れなくなるため、長すぎる品名は切り詰める
+    title = f"{name}（{zone_name}）"
+    if len(title) > 256:
+        title = title[:255] + "…"
+
     return {
-        "title":       f"{name}（{zone_name}）",
+        "title":       title,
         "description": label,
         "color":       color,
         "footer":      {"text": f"期限：{expiry}"},
