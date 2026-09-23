@@ -166,7 +166,7 @@ def build_embed(item: dict, days_left: int) -> dict:
         label = f"⚠️ 期限切れ（{abs(days_left)}日超過）"
         color = COLOR_URGENT
     elif days_left == 0:
-        label = "🔴 今日が期限です！"
+        label = "🔴 今日が期限！"
         color = COLOR_URGENT
     elif days_left == 1:
         label = "🔴 明日が期限！"
