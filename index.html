@@ -206,30 +206,6 @@ header {
   width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0;
 }
 
-/* ── 削除ポップアップ ── */
-.overlay {
-  display: none; position: fixed; inset: 0;
-  background: rgba(10,20,30,.5);
-  z-index: 200; align-items: center; justify-content: center;
-}
-.overlay.show { display: flex; }
-.popup {
-  background: var(--surface); border-radius: 16px;
-  padding: 24px 20px 20px;
-  width: min(320px, 92vw);
-  box-shadow: 0 10px 40px rgba(0,0,0,.2);
-}
-.popup h2 { font-size: 1rem; font-weight: 700; margin-bottom: 8px; }
-.popup p  { font-size: .84rem; color: var(--muted); line-height: 1.7; margin-bottom: 18px; }
-.popup-name { font-weight: 700; color: var(--text); }
-.popup-btns { display: flex; gap: 10px; }
-.popup-btns button {
-  flex: 1; padding: 10px; border: none;
-  border-radius: 8px; font-size: .9rem; font-weight: 700; cursor: pointer;
-}
-.btn-cancel { background: var(--tab-bg); color: var(--text); }
-.btn-del    { background: var(--urgent); color: #fff; }
-
 /* ── トースト ── */
 .toast {
   position: fixed; bottom: 28px; left: 50%;
@@ -311,22 +287,6 @@ header {
 <div class="list-wrap" id="listWrap"></div>
 <div class="footer-note" id="footerNote"></div>
 
-<!-- 削除ポップアップ -->
-<div class="overlay" id="overlay">
-  <div class="popup">
-    <h2>🗑️ 今すぐ削除</h2>
-    <p>
-      <span class="popup-name" id="popupName"></span><br>
-      を削除します。この操作は取り消せません。<br>
-      <span style="color:var(--accent)">使い切った場合はチェック☑️がおすすめです</span>
-    </p>
-    <div class="popup-btns">
-      <button class="btn-cancel" onclick="closePopup()">やめる</button>
-      <button class="btn-del"    onclick="confirmDelete()">削除する</button>
-    </div>
-  </div>
-</div>
-
 <div class="toast" id="toast"></div>
 
 <script>
@@ -344,10 +304,6 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
 
 let currentZone = 'fridge';
 let items       = [];
-let deleteId    = null;
-let pressTimer  = null;
-let pressFired  = false;
-let pressX = 0, pressY = 0;
 let toastTimer  = null;
 
 // ── データ取得 ──
@@ -431,58 +387,6 @@ async function toggleCheck(id) {
   }
 }
 
-// ── 長押し削除 ──
-function startPress(id, e) {
-  clearTimeout(pressTimer);
-  pressFired = false;
-  const t = e && e.touches && e.touches[0];
-  if (t) { pressX = t.clientX; pressY = t.clientY; }
-  pressTimer = setTimeout(() => { pressFired = true; openPopup(Number(id)); }, 1500);
-}
-// 指のわずかな揺れでも touchmove は発生するため、10px以上動いた（スクロール）時だけ取り消す
-function movePress(e) {
-  const t = e.touches && e.touches[0];
-  if (!t) return;
-  if (Math.abs(t.clientX - pressX) > 10 || Math.abs(t.clientY - pressY) > 10) endPress();
-}
-function endPress(e) {
-  clearTimeout(pressTimer);
-  // 長押しでポップアップを開いた直後、指を離した時の合成クリックが
-  // ポップアップのボタンに当たって誤削除されるのを防ぐ
-  if (pressFired && e && e.type === 'touchend' && e.cancelable) e.preventDefault();
-  pressFired = false;
-}
-
-function openPopup(id) {
-  const item = items.find(i => i.id === Number(id));
-  if (!item) return;
-  deleteId = Number(id);
-  document.getElementById('popupName').textContent =
-    `${item.name}（${ZONES[item.zone]} / 期限 ${fmt(item.expiry)}）`;
-  document.getElementById('overlay').classList.add('show');
-}
-function closePopup() {
-  deleteId = null;
-  document.getElementById('overlay').classList.remove('show');
-}
-async function confirmDelete() {
-  if (!deleteId) return;
-  const id     = deleteId;
-  const before = [...items];
-  items = items.filter(i => i.id !== Number(id));
-  closePopup();
-  render();
-  try {
-    const { error } = await sb.from(TABLE).delete().eq('id', Number(id));
-    if (error) throw error;
-    toast('🗑️ 削除しました');
-  } catch (e) {
-    items = before;
-    render();
-    toast('⚠️ 削除エラー: ' + e.message);
-  }
-}
-
 // ── タブ ──
 function switchTab(zone) {
   currentZone = zone;
@@ -519,12 +423,9 @@ function render() {
     const diff = dayDiff(item.expiry);
     const { cls, badge } = statusOf(diff, item.checked);
     return `
-      <div class="item ${cls}"
-        onmousedown="startPress('${item.id}')"   onmouseup="endPress()"   onmouseleave="endPress()"
-        ontouchstart="startPress('${item.id}', event)"  ontouchend="endPress(event)"  ontouchcancel="endPress()"
-        ontouchmove="movePress(event)" oncontextmenu="event.preventDefault()">
+      <div class="item ${cls}">
         <input type="checkbox" ${item.checked ? 'checked' : ''}
-          onchange="toggleCheck('${item.id}')" onclick="event.stopPropagation()" onmousedown="event.stopPropagation()" ontouchstart="event.stopPropagation()">
+          onchange="toggleCheck('${item.id}')">
         <div class="item-body">
           <div class="item-name">${esc(item.name)}</div>
           <div class="item-date">期限 ${fmt(item.expiry)}</div>
