@@ -305,6 +305,7 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
 let currentZone = 'fridge';
 let items       = [];
 let toastTimer  = null;
+const saving    = new Set();   // チェック状態を保存中の品目ID
 
 // ── データ取得 ──
 async function loadItems() {
@@ -372,18 +373,25 @@ async function addItem() {
 
 // ── チェック切り替え ──
 async function toggleCheck(id) {
-  const item = items.find(i => i.id === Number(id));
+  id = Number(id);
+  const item = items.find(i => i.id === id);
   if (!item) return;
+  // 連打すると保存リクエストが前後して届き、画面は未チェックなのにDBはチェック済み
+  // （＝次の自動実行で削除される）になり得るため、保存が終わるまで次の操作を受け付けない
+  if (saving.has(id)) { render(); return; }
   const next = !item.checked;
   item.checked = next;
+  saving.add(id);
   render();
   try {
-    const { error } = await sb.from(TABLE).update({ checked: next }).eq('id', Number(id));
+    const { error } = await sb.from(TABLE).update({ checked: next }).eq('id', id);
     if (error) throw error;
   } catch (e) {
     item.checked = !next;
-    render();
     toast('⚠️ 更新エラー: ' + e.message);
+  } finally {
+    saving.delete(id);
+    render();
   }
 }
 
@@ -424,7 +432,7 @@ function render() {
     const { cls, badge } = statusOf(diff, item.checked);
     return `
       <div class="item ${cls}">
-        <input type="checkbox" ${item.checked ? 'checked' : ''}
+        <input type="checkbox" ${item.checked ? 'checked' : ''} ${saving.has(item.id) ? 'disabled' : ''}
           onchange="toggleCheck('${item.id}')">
         <div class="item-body">
           <div class="item-name">${esc(item.name)}</div>

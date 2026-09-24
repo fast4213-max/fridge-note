@@ -199,20 +199,44 @@ def build_embed(item: dict, days_left: int) -> dict:
     }
 
 
-def send_discord(embeds: list[dict], retries: int = 3) -> bool:
-    """Discord Webhookに送信する（Embedは最大10個まで）。成功:True / 失敗:False"""
+# 送信結果の種類
+SEND_OK, SEND_RETRY_LATER, SEND_BAD_PAYLOAD, SEND_FATAL = "ok", "retry_later", "bad_payload", "fatal"
+
+
+def _webhook_url() -> str:
+    """?wait=true を付けて、送信結果（200/エラー内容）を確実に受け取れるようにする。"""
+    if "wait=" in DISCORD_WEBHOOK_URL:
+        return DISCORD_WEBHOOK_URL
+    sep = "&" if "?" in DISCORD_WEBHOOK_URL else "?"
+    return f"{DISCORD_WEBHOOK_URL}{sep}wait=true"
+
+
+def _retry_after(res) -> float:
+    try:
+        return float(res.json().get("retry_after"))
+    except (ValueError, TypeError, AttributeError):
+        try:
+            return float(res.headers.get("Retry-After", 1))
+        except ValueError:
+            return 1.0
+
+
+def send_discord(embeds: list[dict], retries: int = 5) -> str:
+    """
+    Discord Webhookに送信する（Embedは最大10個まで）。結果の種類を返す。
+      SEND_OK          : 送信成功
+      SEND_RETRY_LATER : 429・5xx・通信エラーがリトライしても解消しない（次回再送）
+      SEND_BAD_PAYLOAD : 400など。中身が不正で何度送っても通らない
+      SEND_FATAL       : 401/403/404。Webhook URL が無効
+    """
     for attempt in range(retries):
         try:
-            res = requests.post(
-                DISCORD_WEBHOOK_URL,
-                json={"embeds": embeds},
-                timeout=10,
-            )
+            res = requests.post(_webhook_url(), json={"embeds": embeds}, timeout=15)
         except requests.RequestException as e:
-            log.error("Discord送信例外: %s", e)
-            return False
+            log.warning("Discord通信エラー（%d回目）: %s", attempt + 1, e)
+            time.sleep(2 ** attempt)
+            continue
 
-        # 通常は 204、URLに ?wait=true が付いていると 200 が返る
         if 200 <= res.status_code < 300:
             # 残り送信可能回数が0なら、制限が解除されるまで待ってから次へ進む
             if res.headers.get("X-RateLimit-Remaining") == "0":
@@ -221,22 +245,45 @@ def send_discord(embeds: list[dict], retries: int = 3) -> bool:
                 except ValueError:
                     wait = 1.0
                 log.info("レートリミット残り0 → %.1f秒待機", wait)
-                time.sleep(wait)
-            return True
+                time.sleep(wait + 0.2)
+            return SEND_OK
 
-        # レートリミット：指定秒数待って再送する
-        if res.status_code == 429 and attempt < retries - 1:
-            try:
-                wait = float(res.json().get("retry_after", 1))
-            except ValueError:
-                wait = 1.0
+        if res.status_code == 429:
+            # レートリミット：指定秒数待って同じ内容を再送する
+            wait = _retry_after(res)
             log.warning("Discordレートリミット → %.1f秒待って再送", wait)
-            time.sleep(wait)
+            time.sleep(wait + 0.2)
             continue
 
-        log.error("Discord送信失敗: HTTP %d / %s", res.status_code, res.text[:200])
-        return False
-    return False
+        if res.status_code >= 500:
+            log.warning("Discordサーバーエラー HTTP %d（%d回目）", res.status_code, attempt + 1)
+            time.sleep(2 ** attempt)
+            continue
+
+        if res.status_code in (401, 403, 404):
+            log.error("Webhook URL が無効です: HTTP %d / %s", res.status_code, res.text[:200])
+            return SEND_FATAL
+
+        log.error("Discord送信失敗（内容が不正）: HTTP %d / %s", res.status_code, res.text[:500])
+        return SEND_BAD_PAYLOAD
+
+    return SEND_RETRY_LATER
+
+
+def mark_sent(item: dict, notify_days: int) -> None:
+    """
+    送信成功 → 送ったフラグ + それより緊急度の低い（日数が大きい）未送信フラグも
+    まとめて True にする（例：前日通知を送ったなら3日前・7日前・30日前もスキップ）
+    """
+    flags_to_set = {}
+    for d, flag_key in NOTIFY_FLAGS.items():
+        if d >= notify_days and flag_key in item and not item.get(flag_key, False):
+            flags_to_set[flag_key] = True
+    try:
+        update_notify_flags(item["id"], flags_to_set)
+    except Exception as e:
+        # フラグ更新失敗は次回重複送信の可能性があるが、処理は続行する
+        log.warning("フラグ更新エラー（id=%s）: %s", item["id"], e)
 
 
 # ── メイン ────────────────────────────────────────────
@@ -284,7 +331,9 @@ def main():
     log.info("通知対象: %d件（上限%d件）", len(targets), MAX_NOTIFY)
 
     # ④ Discord送信（最大MAX_NOTIFY件を10件ずつまとめて送る。超えた分は繰り越し・削除しない）
+    #    フラグは送信成功した分だけ立てる → 失敗・未送信分は次回あらためて送られる
     sent_count = 0
+    bad_count  = 0
     failed     = False
     to_send    = targets[:MAX_NOTIFY]
 
@@ -296,29 +345,44 @@ def main():
         for item, days_left, notify_days in chunk:
             log.info("送信: %s（あと%d日 / %d日前通知）", item.get("name"), days_left, notify_days)
 
-        if not send_discord([build_embed(item, days_left) for item, days_left, _ in chunk]):
-            log.error("送信失敗 → 処理を中断します（未送信分は次回へ繰り越し）")
-            failed = True
-            break
+        result = send_discord([build_embed(item, days_left) for item, days_left, _ in chunk])
 
-        # 送信成功 → 送ったフラグ + それより緊急度の低い（日数が大きい）未送信フラグも
-        # まとめて True にする（例：前日通知を送ったなら3日前・7日前・30日前もスキップ）
-        for item, _, notify_days in chunk:
-            flags_to_set = {}
-            for d, flag_key in NOTIFY_FLAGS.items():
-                if d >= notify_days and flag_key in item and not item.get(flag_key, False):
-                    flags_to_set[flag_key] = True
-            try:
-                update_notify_flags(item["id"], flags_to_set)
-            except Exception as e:
-                # フラグ更新失敗は次回重複送信の可能性があるが、処理は続行する
-                log.warning("フラグ更新エラー（id=%s）: %s", item["id"], e)
+        if result == SEND_OK:
+            for item, _, notify_days in chunk:
+                mark_sent(item, notify_days)
+            sent_count += len(chunk)
+            continue
 
-        sent_count += len(chunk)
+        if result == SEND_BAD_PAYLOAD:
+            # 不正な1件のせいで同じメッセージの全件が毎回止まらないよう、1件ずつ送り直す。
+            # 通らなかった1件はフラグを立てずに残す（ログで原因を確認できる）
+            log.warning("まとめ送信が拒否されたため1件ずつ送り直します")
+            for item, days_left, notify_days in chunk:
+                time.sleep(SEND_INTERVAL_SEC)
+                r1 = send_discord([build_embed(item, days_left)])
+                if r1 == SEND_OK:
+                    mark_sent(item, notify_days)
+                    sent_count += 1
+                elif r1 == SEND_BAD_PAYLOAD:
+                    log.error("送信できない品目をスキップ（id=%s / %s）", item.get("id"), item.get("name"))
+                    bad_count += 1
+                else:
+                    result = r1
+                    break
+            else:
+                continue
+
+        # SEND_FATAL / SEND_RETRY_LATER → 中断して残りは次回へ
+        log.error("送信失敗 → 処理を中断します（未送信分は次回へ繰り越し）")
+        failed = True
+        break
 
     # ⑤ 繰り越し件数をログ出力
-    remaining = len(targets) - sent_count
+    remaining = len(targets) - sent_count - bad_count
     log.info("送信成功: %d件", sent_count)
+    if bad_count:
+        log.error("内容が不正で送れなかった品目: %d件（上のログを確認してください）", bad_count)
+        failed = True
     if remaining > 0:
         log.info("繰り越し（次回送信）: %d件", remaining)
     log.info("=== 通知処理 終了 ===")
